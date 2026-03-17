@@ -8,7 +8,7 @@ import { connectToDB } from "./config/db.js";
 import mediaRouter from "./routers/media.routes.js";
 
 dotenv.config();
-connectToDB();
+await connectToDB();
 
 const app = express();
 
