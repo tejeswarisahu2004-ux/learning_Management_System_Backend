@@ -39,10 +39,38 @@ export const getEnrolledCourses = async (req, res) => {
 
 export const getAllPublishedCourses = async (req, res) => {
   try {
-    const courses = await Course.find({ isPublished: true }).populate({
-      path: "creator",
-      select: "name photoUrl",
-    });
+    const { search = "", category = "", level = "", sort = "" } = req.query;
+    
+    let query = { isPublished: true };
+    
+    if (search) {
+      query.$or = [
+        { courseTitle: { $regex: search, $options: "i" } },
+        { subTitle: { $regex: search, $options: "i" } },
+        { description: { $regex: search, $options: "i" } },
+      ];
+    }
+    
+    if (category) {
+      query.category = category;
+    }
+    
+    if (level) {
+      query.courseLevel = level;
+    }
+    
+    let sortOptions = {};
+    if (sort === "low") {
+      sortOptions.coursePrice = 1;
+    } else if (sort === "high") {
+      sortOptions.coursePrice = -1;
+    } else {
+      sortOptions.createdAt = -1; // default sort by newest
+    }
+
+    const courses = await Course.find(query)
+      .populate({ path: "creator", select: "name photoUrl" })
+      .sort(sortOptions);
 
     if (!courses || courses.length === 0) {
       return res
@@ -113,7 +141,9 @@ export const getCreatorCourses = async (req, res) => {
 export const getCourseById = async (req, res) => {
   try {
     const { courseId } = req.params;
-    const course = await Course.findById(courseId);
+    const course = await Course.findById(courseId)
+      .populate("lectures")
+      .populate({ path: "creator", select: "name photoUrl" });
     if (!course) {
       return res
         .status(404)
@@ -142,6 +172,12 @@ export const editCourse = async (req, res) => {
       category,
       courseLevel,
       coursePrice,
+      duration,
+      articlesCount,
+      resourcesCount,
+      isMobileAccessible,
+      rating,
+      views,
     } = req.body;
 
     const thumbnail = req.file;
@@ -154,7 +190,7 @@ export const editCourse = async (req, res) => {
         .json({ success: false, message: "Course not found" });
     }
 
-    let courseThumbnail;
+    let courseThumbnail = course.courseThumbnail;
 
     if (thumbnail) {
       if (course.courseThumbnail) {
@@ -163,21 +199,27 @@ export const editCourse = async (req, res) => {
       }
       const cloudResponse = await UploadMedia(thumbnail.path);
       courseThumbnail = cloudResponse.secure_url;
-
-      const updatedCourse = {
-        courseTitle,
-        subTitle,
-        description,
-        category,
-        courseLevel,
-        coursePrice,
-        courseThumbnail,
-      };
-
-      course = await Course.findByIdAndUpdate(courseId, updatedCourse, {
-        new: true,
-      });
     }
+
+    const updatedCourse = {
+      courseTitle,
+      subTitle,
+      description,
+      category,
+      courseLevel,
+      coursePrice,
+      courseThumbnail,
+      duration: duration !== undefined ? duration : course.duration,
+      articlesCount: articlesCount !== undefined ? Number(articlesCount) : course.articlesCount,
+      resourcesCount: resourcesCount !== undefined ? Number(resourcesCount) : course.resourcesCount,
+      isMobileAccessible: isMobileAccessible !== undefined ? isMobileAccessible === "true" || isMobileAccessible === true : course.isMobileAccessible,
+      rating: rating !== undefined ? Number(rating) : course.rating,
+      views: views !== undefined ? Number(views) : course.views,
+    };
+
+    course = await Course.findByIdAndUpdate(courseId, updatedCourse, {
+      new: true,
+    });
 
     return res
       .status(200)
@@ -359,5 +401,94 @@ export const togglePublishCourse = async (req, res) => {
       message: "Failed to toggle publish course",
       error: error.message,
     });
+  }
+};
+
+export const enrollCourse = async (req, res) => {
+  try {
+    const userId = req.id;
+    const { courseId } = req.params;
+
+    const course = await Course.findById(courseId);
+    if (!course) {
+      return res.status(404).json({ success: false, message: "Course not found" });
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    if (user.enrolledCourses.includes(courseId)) {
+      return res.status(400).json({ success: false, message: "Already enrolled in this course" });
+    }
+
+    user.enrolledCourses.push(courseId);
+    await user.save();
+
+    if (!course.enrolledStudents.includes(userId)) {
+      course.enrolledStudents.push(userId);
+      await course.save();
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Successfully enrolled in the course",
+      course,
+    });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ success: false, message: "Failed to enroll in the course" });
+  }
+};
+
+export const getDashboardData = async (req, res) => {
+  try {
+    const creatorId = req.id;
+    const courses = await Course.find({ creator: creatorId }).populate("enrolledStudents");
+
+    if (!courses) {
+      return res.status(200).json({
+        success: true,
+        totalSales: 0,
+        totalStudents: 0,
+        totalCourses: 0,
+        courses: [],
+      });
+    }
+
+    const totalCourses = courses.length;
+    
+    // Count unique enrolled students across all instructor's courses
+    const uniqueStudents = new Set();
+    let totalSales = 0;
+    
+    courses.forEach((course) => {
+      if (course.enrolledStudents) {
+        course.enrolledStudents.forEach((student) => {
+          uniqueStudents.add(student._id.toString());
+        });
+        totalSales += (course.coursePrice || 0) * course.enrolledStudents.length;
+      }
+    });
+
+    const totalStudents = uniqueStudents.size;
+
+    return res.status(200).json({
+      success: true,
+      totalSales,
+      totalStudents,
+      totalCourses,
+      courses: courses.map(c => ({
+        _id: c._id,
+        courseTitle: c.courseTitle,
+        coursePrice: c.coursePrice,
+        enrolledStudentsCount: c.enrolledStudents ? c.enrolledStudents.length : 0,
+        isPublished: c.isPublished,
+      })),
+    });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ success: false, message: "Failed to load dashboard data" });
   }
 };
