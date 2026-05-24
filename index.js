@@ -21,7 +21,7 @@ app.use(
   cors({
     origin: [
         process.env.FRONTEND_URL,
-      "https://sruthilms.netlify.app/"
+      "https://sruthilms.netlify.app"
    ],
     credentials: true,
   })
