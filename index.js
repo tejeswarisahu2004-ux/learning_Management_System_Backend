@@ -19,7 +19,10 @@ app.use(cookieParser());
 app.use(express.urlencoded({ extended : true }));
 app.use(
   cors({
-    origin: "https://learning-management-system-backend-8zak.onrender.com",
+    origin: [
+        process.env.FRONTEND_URL,
+      "https://sruthilms.netlify.app/"
+   ],
     credentials: true,
   })
 );
